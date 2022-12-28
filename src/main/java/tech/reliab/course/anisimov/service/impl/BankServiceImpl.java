@@ -3,6 +3,10 @@ package tech.reliab.course.anisimov.service.impl;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import tech.reliab.course.anisimov.entity.*;
+import tech.reliab.course.anisimov.exception.DoesNotExistException;
+import tech.reliab.course.anisimov.exception.IssuingCreditException;
+import tech.reliab.course.anisimov.exception.NotEnoughMoneyException;
+import tech.reliab.course.anisimov.exception.UnuniqeIdException;
 import tech.reliab.course.anisimov.service.BankOfficeService;
 import tech.reliab.course.anisimov.service.BankService;
 import tech.reliab.course.anisimov.service.UserService;
@@ -20,7 +24,7 @@ final public class BankServiceImpl implements BankService {
 
     //region ===================== BankService implementation ======================
     @Override
-    public @Nullable Bank create(@NotNull Bank bank) {
+    public @NotNull Bank create(@NotNull Bank bank) throws UnuniqeIdException {
         bank.setRating(RandomGenerator.getDefault().nextInt(100));
         bank.setTotalMoney(RandomGenerator.getDefault().nextDouble(10_000, 1_000_000));
         this.calculateInterestRate(bank);
@@ -28,25 +32,28 @@ final public class BankServiceImpl implements BankService {
     }
 
     @Override
-    public @Nullable Bank addBank(@NotNull Bank bank) {
-        if (this.bankMap.containsKey(bank.getId())) { return null; }
+    public @NotNull Bank addBank(@NotNull Bank bank) throws UnuniqeIdException {
+        if (this.bankMap.containsKey(bank.getId())) { throw new UnuniqeIdException(bank.getId()); }
 
         this.bankMap.put(bank.getId(), bank);
         return this.bankMap.get(bank.getId());
     }
 
     @Override
-    public @Nullable Bank getBankById(@NotNull String bankId) {
-        return this.bankMap.get(bankId);
+    public @NotNull Bank getBankById(@NotNull String bankId) throws DoesNotExistException {
+        Bank bank = this.bankMap.get(bankId);
+        if (bank == null) { throw new DoesNotExistException(bankId);}
+
+        return bank;
     }
 
     @Override
-    public @NotNull Boolean deleteBank(@NotNull String bankId) {
-        if (!this.bankMap.containsKey(bankId)) {return false; }
+    public @NotNull Boolean deleteBank(@NotNull String bankId) throws DoesNotExistException {
+        if (this.bankMap.containsKey(bankId)) { throw new DoesNotExistException(bankId); }
 
-        this.bankOfficeService.getOfficesByBankId(bankId).forEach(bankOffice ->
-                this.removeOffice(bankId, bankOffice.getId())
-        );
+        for (BankOffice bankOffice : this.bankOfficeService.getOfficesByBankId(bankId)) {
+            this.removeOffice(bankId, bankOffice.getId());
+        }
 
         return this.bankMap.remove(bankId) != null;
     }
@@ -74,29 +81,26 @@ final public class BankServiceImpl implements BankService {
     }
 
     @Override
-    public void depositMoney(@NotNull String bankId, double sum) {
-        Bank bank = this.bankMap.get(bankId);
-        if (bank == null) { return; }
+    public void depositMoney(@NotNull String bankId, double sum) throws DoesNotExistException {
+        Bank bank = this.getBankById(bankId);
 
         bank.setTotalMoney(bank.getTotalMoney() + sum);
     }
 
     @Override
-    public void withdrawMoney(@NotNull String bankId, double sum) {
-        Bank bank = this.bankMap.get(bankId);
-        if (bank == null) { return; }
+    public void withdrawMoney(@NotNull String bankId, double sum) throws DoesNotExistException, NotEnoughMoneyException {
+        Bank bank = this.getBankById(bankId);
 
         if (bank.getTotalMoney() >= sum) {
             bank.setTotalMoney(bank.getTotalMoney() - sum);
         } else {
-            System.out.println("В банке недостаточно денег");
+            throw new NotEnoughMoneyException();
         }
     }
 
     @Override
-    public void addOffice(@NotNull String bankId, @NotNull BankOffice office) {
+    public void addOffice(@NotNull String bankId, @NotNull BankOffice office) throws DoesNotExistException {
         Bank bank = this.getBankById(bankId);
-        if (bank == null) { return; }
 
         bank.setOfficesCount(bank.getOfficesCount() + 1);
         bank.setAtmsCount(bank.getAtmsCount() + office.getAtmsCount());
@@ -105,22 +109,24 @@ final public class BankServiceImpl implements BankService {
     }
 
     @Override
-    public @NotNull Boolean removeOffice(@NotNull String bankId, @NotNull String officeId) {
+    public @NotNull Boolean removeOffice(@NotNull String bankId, @NotNull String officeId) throws DoesNotExistException {
         Bank bank = this.getBankById(bankId);
         BankOffice bankOffice = this.bankOfficeService.getOfficeById(officeId);
-        if (bank == null || bankOffice == null) { return false; }
 
         this.bankOfficeService.deleteOffice(officeId);
         bank.setOfficesCount(bank.getOfficesCount() - 1);
-        this.withdrawMoney(bankId, bankOffice.getTotalCash());
+        try {
+            this.withdrawMoney(bankId, bankOffice.getTotalCash());
+        } catch (NotEnoughMoneyException e) {
+            return false;
+        }
 
         return true;
     }
 
     @Override
-    public @NotNull Boolean addClient(@NotNull String bankId, @NotNull User user) {
+    public @NotNull Boolean addClient(@NotNull String bankId, @NotNull User user) throws DoesNotExistException {
         Bank bank = this.getBankById(bankId);
-        if (bank == null) { return false; }
 
         user.setBank(bank);
         bank.setClientsCount(bank.getClientsCount() + 1);
@@ -129,18 +135,16 @@ final public class BankServiceImpl implements BankService {
     }
 
     @Override
-    public @NotNull Boolean removeClient(@NotNull String bankId, @NotNull String userId) {
+    public @NotNull Boolean removeClient(@NotNull String bankId, @NotNull String userId) throws DoesNotExistException {
         Bank bank = this.getBankById(bankId);
-        if (bank == null) { return false; }
 
         bank.setClientsCount(bank.getClientsCount() - 1);
         return true;
     }
 
     @Override
-    public @NotNull Boolean addEmployee(@NotNull String bankId, @NotNull Employee employee) {
+    public @NotNull Boolean addEmployee(@NotNull String bankId, @NotNull Employee employee) throws DoesNotExistException {
         Bank bank = this.getBankById(bankId);
-        if (bank == null) { return false; }
 
         employee.setBankOfWork(bank);
         bank.setEmployeesCount(bank.getEmployeesCount() + 1);
@@ -149,9 +153,8 @@ final public class BankServiceImpl implements BankService {
     }
 
     @Override
-    public @NotNull Boolean removeEmployee(@NotNull String bankId, @NotNull String employeeId) {
+    public @NotNull Boolean removeEmployee(@NotNull String bankId, @NotNull String employeeId) throws DoesNotExistException {
         Bank bank = this.getBankById(bankId);
-        if (bank == null) { return false; }
 
         bank.setEmployeesCount(bank.getEmployeesCount() - 1);
         return true;
@@ -162,9 +165,8 @@ final public class BankServiceImpl implements BankService {
             @NotNull String bankId,
             @NotNull CreditAccount creditAccount,
             @NotNull Employee employee
-    ) {
+    ) throws DoesNotExistException, IssuingCreditException {
         Bank bank = this.getBankById(bankId);
-        if (bank == null) { return false; }
 
         double sum = creditAccount.getLoanAmount();
         if (bank.getTotalMoney() >= sum) {
@@ -179,37 +181,66 @@ final public class BankServiceImpl implements BankService {
                     creditAccount.setLoadEndDate(creditAccount.getLoanStartDate().plusMonths(creditAccount.getLoanMonthCount()));
 
                     return true;
-                } else {
-                    System.out.println("Пользовтель не может позволить себе погашение кредита");
                 }
-            } else {
-                System.out.println("Данный сотрудник не может выдавать кредиты");
             }
-        } else {
-            System.out.println("В банке недостатоно денег для выдачи кредит");
         }
 
-        return false;
+        throw new IssuingCreditException();
     }
 
     @Override
-    public @Nullable String stringRepresentation(@NotNull String bankId) {
+    public @NotNull String stringRepresentation(@NotNull String bankId) throws DoesNotExistException {
         Bank bank = this.getBankById(bankId);
-        if (bank == null) { return null; }
 
         StringBuilder builder = new StringBuilder(bank.toString());
 
         builder.append("Информация о офисах\n");
-        this.bankOfficeService.getOfficesByBankId(bankId).forEach(bankOffice ->
-            builder.append(this.bankOfficeService.stringRepresentation(bankOffice.getId())).append("\n")
-        );
+        for (BankOffice bankOffice : this.bankOfficeService.getOfficesByBankId(bankId)) {
+            builder.append(this.bankOfficeService.stringRepresentation(bankOffice.getId())).append("\n");
+        }
 
         builder.append("Информация о клиентах\n");
-        this.userService.getAllUsersByBankId(bankId).forEach(user ->
-            builder.append(this.userService.stringRepresentation(user.getId())).append("\n")
-        );
+        for (User user : this.userService.getAllUsersByBankId(bankId)) {
+            builder.append(this.userService.stringRepresentation(user.getId())).append("\n");
+        }
 
         builder.append("\n");
         return builder.toString();
+    }
+
+    @Override
+    public @NotNull List<Bank> getSuitableForLoanBanks(double sum, int monthCount) throws IssuingCreditException {
+        List<Bank> banks = new ArrayList<>();
+
+        for (Bank bank : this.getAllBanks()) {
+            try {
+                if (this.isSuitableForLoan(bank.getId(), sum)) {
+                    banks.add(bank);
+                }
+            } catch (DoesNotExistException e) {
+                throw new IssuingCreditException();
+            }
+        }
+        if (banks.isEmpty()) { throw new IssuingCreditException(); }
+
+        return banks;
+    }
+
+    @Override
+    public @NotNull Boolean isSuitableForLoan(@NotNull String bankId, double money) throws DoesNotExistException {
+        return !this.getSuitableForLoanOffices(bankId, money).isEmpty();
+    }
+
+    @Override
+    public @NotNull List<BankOffice> getSuitableForLoanOffices(@NotNull String bankId, double money) throws DoesNotExistException {
+        List<BankOffice> bankOffices = new ArrayList<>();
+
+        for (BankOffice bankOffice : this.bankOfficeService.getOfficesByBankId(bankId)) {
+            if (this.bankOfficeService.isSuitableForLoan(bankOffice.getId(), money)) {
+                bankOffices.add(bankOffice);
+            }
+        }
+
+        return bankOffices;
     }
 }

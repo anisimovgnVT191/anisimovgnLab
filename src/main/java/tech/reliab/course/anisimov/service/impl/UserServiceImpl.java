@@ -6,6 +6,8 @@ import tech.reliab.course.anisimov.entity.Bank;
 import tech.reliab.course.anisimov.entity.CreditAccount;
 import tech.reliab.course.anisimov.entity.PaymentAccount;
 import tech.reliab.course.anisimov.entity.User;
+import tech.reliab.course.anisimov.exception.DoesNotExistException;
+import tech.reliab.course.anisimov.exception.UnuniqeIdException;
 import tech.reliab.course.anisimov.service.BankService;
 import tech.reliab.course.anisimov.service.CreditAccountService;
 import tech.reliab.course.anisimov.service.PaymentAccountService;
@@ -16,7 +18,7 @@ import java.util.*;
 
 final public class UserServiceImpl implements UserService {
     //region ===================== Properties ======================
-    private Map<String, User> userMap = new HashMap<>();
+    private final Map<String, User> userMap = new HashMap<>();
 
     //region ===================== DI ======================
     @NotNull public CreditAccountService creditAccountService;
@@ -25,19 +27,23 @@ final public class UserServiceImpl implements UserService {
 
     //region ===================== UserServiceOverrides ======================
     @Override
-    public @Nullable User create(@NotNull User user) {
+    public @Nullable User create(@NotNull User user) throws UnuniqeIdException {
         this.calculateRating(user);
         return this.addUser(new User(user));
     }
 
     @Override
-    public @Nullable User addUser(@NotNull User user) {
-        if (this.userMap.containsKey(user.getId())) { return null; }
+    public @Nullable User addUser(@NotNull User user) throws UnuniqeIdException {
+        if (this.userMap.containsKey(user.getId())) { throw new UnuniqeIdException(user.getId()); }
 
         Bank bank = user.getBank();
-        if (bank != null && this.bankService.addClient(bank.getId(), user)) {
-            this.userMap.put(user.getId(), user);
-            return user;
+        try {
+            if (bank != null && this.bankService.addClient(bank.getId(), user)) {
+                this.userMap.put(user.getId(), user);
+                return user;
+            }
+        } catch (DoesNotExistException e) {
+            return null;
         }
 
         return null;
@@ -49,21 +55,24 @@ final public class UserServiceImpl implements UserService {
     }
 
     @Override
-    public @Nullable User getUserById(@NotNull String userId) {
-        return this.userMap.get(userId);
+    public @NotNull User getUserById(@NotNull String userId) throws DoesNotExistException {
+        User user = this.userMap.get(userId);
+        if (user == null) { throw new DoesNotExistException(userId); }
+
+        return user;
     }
 
     @Override
-    public @NotNull Boolean deleteUser(@NotNull String userId) {
+    public @NotNull Boolean deleteUser(@NotNull String userId) throws DoesNotExistException {
         User user = this.getUserById(userId);
-        if (user == null) { return false; }
 
-        this.paymentAccountService.getUsersAccounts(userId).forEach(account ->
-                this.paymentAccountService.deleteAccount(account.getId())
-        );
-        this.creditAccountService.getUsersAccounts(userId).forEach(creditAccount ->
-                this.creditAccountService.deleteAccount(creditAccount.getId())
-        );
+        for (PaymentAccount account : this.paymentAccountService.getUsersAccounts(userId)) {
+            this.paymentAccountService.deleteAccount(account.getId());
+        }
+        for (CreditAccount account : this.creditAccountService.getUsersAccounts(userId)) {
+            this.creditAccountService.deleteAccount(account.getId());
+        }
+
         this.bankService.removeClient(user.getBank().getId(), userId);
 
         return true;
@@ -78,9 +87,8 @@ final public class UserServiceImpl implements UserService {
     }
 
     @Override
-    public @NotNull Boolean addCreditAccount(@NotNull String userId, @NotNull CreditAccount creditAccount) {
+    public @NotNull Boolean addCreditAccount(@NotNull String userId, @NotNull CreditAccount creditAccount) throws DoesNotExistException {
         User user = this.getUserById(userId);
-        if (user == null) { return false; }
 
         user.setCreditAccountsCount(user.getCreditAccountsCount() + 1);
 
@@ -88,9 +96,8 @@ final public class UserServiceImpl implements UserService {
     }
 
     @Override
-    public @NotNull Boolean removeCreditAccount(@NotNull String userId, @NotNull String accountId) {
+    public @NotNull Boolean removeCreditAccount(@NotNull String userId, @NotNull String accountId) throws DoesNotExistException {
         User user = this.getUserById(userId);
-        if (user == null) { return false; }
 
         if (user.getCreditAccountsCount() > 0) {
             user.setCreditAccountsCount(user.getCreditAccountsCount() - 1);
@@ -101,9 +108,8 @@ final public class UserServiceImpl implements UserService {
     }
 
     @Override
-    public @NotNull Boolean addPaymentAccount(@NotNull String userId, @NotNull PaymentAccount paymentAccount) {
+    public @NotNull Boolean addPaymentAccount(@NotNull String userId, @NotNull PaymentAccount paymentAccount) throws DoesNotExistException {
         User user = this.getUserById(userId);
-        if (user == null) { return false; }
 
         user.setPaymentAccountsCount(user.getPaymentAccountsCount() + 1);
 
@@ -111,9 +117,8 @@ final public class UserServiceImpl implements UserService {
     }
 
     @Override
-    public @NotNull Boolean removePaymentAccount(@NotNull String userId, @NotNull String paymentId) {
+    public @NotNull Boolean removePaymentAccount(@NotNull String userId, @NotNull String paymentId) throws DoesNotExistException {
         User user = this.getUserById(userId);
-        if (user == null) { return false; }
 
         if (user.getPaymentAccountsCount() > 0) {
             user.setCreditAccountsCount(user.getPaymentAccountsCount() - 1);
@@ -144,21 +149,20 @@ final public class UserServiceImpl implements UserService {
     }
 
     @Override
-    public @Nullable String stringRepresentation(@NotNull String userId) {
+    public @NotNull String stringRepresentation(@NotNull String userId) throws DoesNotExistException {
         User user = this.getUserById(userId);
-        if (user == null) { return null; }
 
         StringBuilder builder = new StringBuilder(user.toString());
 
         builder.append("Кредитные аккаунты:\n");
-        this.creditAccountService.getUsersAccounts(userId).forEach(account ->
-            builder.append(creditAccountService.stringRepresentation(account.getId())).append("\n")
-        );
+        for (CreditAccount account : this.creditAccountService.getUsersAccounts(userId)) {
+            builder.append(creditAccountService.stringRepresentation(account.getId())).append("\n");
+        }
 
         builder.append("Платежные аккаунты:\n");
-        this.paymentAccountService.getUsersAccounts(userId).forEach(account ->
-            builder.append(this.paymentAccountService.stringRepresentation(account.getId())).append("\n")
-        );
+        for (PaymentAccount account : this.paymentAccountService.getUsersAccounts(userId)) {
+            builder.append(this.paymentAccountService.stringRepresentation(account.getId())).append("\n");
+        }
 
         builder.append("\n");
         return builder.toString();

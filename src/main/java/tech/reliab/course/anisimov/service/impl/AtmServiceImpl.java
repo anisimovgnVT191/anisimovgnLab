@@ -1,15 +1,16 @@
 package tech.reliab.course.anisimov.service.impl;
 
-import org.jetbrains.annotations.Contract;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import tech.reliab.course.anisimov.entity.Bank;
 import tech.reliab.course.anisimov.entity.BankAtm;
 import tech.reliab.course.anisimov.entity.BankOffice;
+import tech.reliab.course.anisimov.exception.CannotDepositMoneyException;
+import tech.reliab.course.anisimov.exception.DoesNotExistException;
+import tech.reliab.course.anisimov.exception.NotEnoughMoneyException;
+import tech.reliab.course.anisimov.exception.UnuniqeIdException;
 import tech.reliab.course.anisimov.service.AtmService;
 import tech.reliab.course.anisimov.service.BankOfficeService;
-import tech.reliab.course.anisimov.service.BankService;
-import tech.reliab.course.anisimov.service.EmployeeService;
 
 import java.util.*;
 
@@ -26,21 +27,24 @@ final public class AtmServiceImpl implements AtmService {
 
     //region ===================== AtmService implementation ======================
     @Override
-    public @Nullable BankAtm create(@NotNull BankAtm bankAtm) {
+    public @Nullable BankAtm create(@NotNull BankAtm bankAtm) throws UnuniqeIdException {
         return this.addAtm(bankAtm);
     }
 
     @Override
-    public @Nullable BankAtm addAtm(@NotNull BankAtm bankAtm) {
+    public @Nullable BankAtm addAtm(@NotNull BankAtm bankAtm) throws UnuniqeIdException {
         if (this.bankAtmMap.containsKey(bankAtm.getId())) {
-            System.out.println("Банкомат с таким id уже существует в системе");
-            return null;
+            throw new UnuniqeIdException(bankAtm.getId());
         }
 
         BankOffice bankOffice = bankAtm.getBankOffice();
         if (bankOffice != null) {
             this.bankAtmMap.put(bankAtm.getId(), bankAtm);
-            this.bankOfficeService.addAtm(bankOffice.getId(), bankAtm);
+            try {
+                this.bankOfficeService.addAtm(bankOffice.getId(), bankAtm);
+            } catch (DoesNotExistException e) {
+                return null;
+            }
             return bankAtm;
         } else {
             System.out.println("У банкомата не указан банк");
@@ -49,12 +53,18 @@ final public class AtmServiceImpl implements AtmService {
     }
 
     @Override
-    public @Nullable BankAtm getAtmById(@NotNull String atmId) {
-        return this.bankAtmMap.get(atmId);
+    public @NotNull BankAtm getAtmById(@NotNull String atmId) throws DoesNotExistException {
+        BankAtm bankAtm = this.bankAtmMap.get(atmId);
+
+        if (bankAtm == null) {
+            throw new DoesNotExistException(atmId);
+        } else {
+            return bankAtm;
+        }
     }
 
     @Override
-    public @NotNull List<BankAtm> getAllAtms(@NotNull String bankId) {
+    public @NotNull List<BankAtm> getAllAtms() {
         return new ArrayList<>(this.bankAtmMap.values());
     }
 
@@ -75,9 +85,9 @@ final public class AtmServiceImpl implements AtmService {
     }
 
     @Override
-    public @NotNull Boolean deleteAtm(@NotNull String atmId) {
+    public @NotNull Boolean deleteAtm(@NotNull String atmId) throws DoesNotExistException {
         BankAtm atm = this.bankAtmMap.get(atmId);
-        if (atm == null) { return false; }
+        if (atm == null) { throw new DoesNotExistException(atmId); }
 
 
         if (this.bankOfficeService.removeAtm(atm.getBankOffice().getId(), atmId)) {
@@ -88,9 +98,9 @@ final public class AtmServiceImpl implements AtmService {
     }
 
     @Override
-    public void depositMoney(@NotNull String atmId, double sum) {
+    public void depositMoney(@NotNull String atmId, double sum) throws DoesNotExistException, CannotDepositMoneyException {
         BankAtm atm = this.getAtmById(atmId);
-        if (atm == null || atm.getBankOffice() == null || atm.getBank() == null) { return; }
+        if (atm.getBankOffice() == null || atm.getBank() == null) { return; }
 
         switch (atm.getStatus()) {
             case OPEN, RUN_OUT_OF_MONEY -> {
@@ -103,20 +113,19 @@ final public class AtmServiceImpl implements AtmService {
                     bankOffice.setTotalCash(bankOffice.getTotalCash() + newSum);
                     bank.setTotalMoney(bank.getTotalMoney() + newSum);
                 } else {
-                    System.out.println("Внесение наличных возможных невозможно");
+                    throw new CannotDepositMoneyException();
                 }
             }
             case CLOSED -> {
                 System.out.println("Банкомат закрыт");
             }
-
         }
     }
 
     @Override
-    public void withdrawMoney(@NotNull String atmId, double sum) {
+    public void withdrawMoney(@NotNull String atmId, double sum) throws DoesNotExistException, NotEnoughMoneyException {
         BankAtm atm = this.getAtmById(atmId);
-        if (atm == null || atm.getBank() == null || atm.getBankOffice() == null) { return; }
+        if (atm.getBank() == null || atm.getBankOffice() == null) { return; }
 
         switch (atm.getStatus()) {
             case OPEN -> {
@@ -130,7 +139,7 @@ final public class AtmServiceImpl implements AtmService {
                         office.setTotalCash(office.getTotalCash() - newSum);
                         bank.setTotalMoney(bank.getTotalMoney() - newSum);
                     } else {
-                        System.out.println("В банкомате недостаточно средств");
+                        throw new NotEnoughMoneyException();
                     }
                 } else {
                     System.out.println("Снятие наличных невозможно");
@@ -146,10 +155,16 @@ final public class AtmServiceImpl implements AtmService {
     }
 
     @Override
-    public @Nullable String stringRepresentation(@NotNull String atmId) {
+    public @NotNull String stringRepresentation(@NotNull String atmId) throws DoesNotExistException {
         BankAtm bankAtm = this.getAtmById(atmId);
-        if (bankAtm == null) { return null; }
 
         return bankAtm.toString();
+    }
+
+    @Override
+    public @NotNull Boolean isSuitableForLoan(@NotNull String atmId, double sum) throws DoesNotExistException {
+        BankAtm atm = this.getAtmById(atmId);
+
+        return atm.getTotalCash() > sum;
     }
 }
